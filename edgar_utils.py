@@ -181,6 +181,9 @@ class MetricsMethodology(object):
         
         return self.metrics.style.applymap(negative_red,subset=attribs).format(dict.fromkeys(nums,"{:,.0f}") | dict.fromkeys(pct,"{:,.2%}"))
 
+    def write_spreadsheet(self, writer, sheetname):
+        self.metrics.to_excel(writer, sheet_name=sheetname)
+        self.report.to_excel(writer, sheet_name=sheetname,startrow=len(self.metrics)+4)
     
 def negative_red(val):
     color = 'red' if val < 0 else 'green'
@@ -327,7 +330,8 @@ class Mizrahi(MetricsMethodology):
         return self.pretty(['Solvency_YoY','ROE_YoY', 'Sales_YoY','NPM_YoY', 'Oper_Margin_YoY','EPS_YoY', 'FCF_YoY','FCF_Margin_YoY'],
                     ['Sales','FCF'],['FCF_Margin','OperatingMargin','ROE','NPM','ROE_YoY', 'Sales_YoY','NPM_YoY', 'Oper_Margin_YoY','EPS_YoY', 'FCF_YoY','FCF_Margin_YoY'])
 
-
+    def write_spreadsheet(self, writer):
+        MetricsMethodology.write_spreadsheet(self, writer, sheetname="Mizrahi")
 
 class ThreeBrians(MetricsMethodology):
 
@@ -641,7 +645,8 @@ class ThreeBrians(MetricsMethodology):
         # return self.pretty(['Solvency_YoY','ROE_YoY', 'Sales_YoY','NPM_YoY', 'Oper_Margin_YoY','EPS_YoY', 'FCF_YoY','FCF_Margin_YoY'],
         #             ['Sales','FCF'],['QuickRatio','CurrentRatio','ROE','NPM','ROE_YoY', 'Sales_YoY','NPM_YoY', 'Oper_Margin_YoY','EPS_YoY', 'FCF_YoY','FCF_Margin_YoY'])
 
-
+    def write_spreadsheet(self, writer):
+        MetricsMethodology.write_spreadsheet(self, writer, sheetname="3Brians")
 
 class Buffett(MetricsMethodology):
 
@@ -821,6 +826,22 @@ class Buffett(MetricsMethodology):
         return self.pretty(['EPS_YoY', 'RetainedYoY'],
                     ['IncomeTaxManualCalc','ReportedTax','EBT','Inventory','RetainedEarnings','NetSharesBuyback'],
                     ['GrossMargin','NPM','SGA','InterestExpense','DepreciationAmortizationExpense', 'NetReceivables','ROA', 'AdjDebtToEquityRatio','RetainedYoY', 'CapEx/NetIncome'])
+    
+    def write_spreadsheet(self, writer):
+        MetricsMethodology.write_spreadsheet(self, writer, sheetname="Buffett")
+        # self.report.to_excel(writer, sheetname="Buffett")
+    
 
     
-    
+def write_spreadsheet(fname, *methods): #, mizrahi, threebrians):
+    with pd.ExcelWriter(fname) as writer:
+   
+        for m in methods:
+            m.write_spreadsheet(writer)
+
+        # buffett.write_spreadsheet(writer)
+        # data_frame2.to_excel(writer, sheet_name="Vegetables", index=False)
+        # data_frame3.to_excel(writer, sheet_name="Baked Items", index=False)
+
+
+   
