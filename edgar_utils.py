@@ -5,6 +5,7 @@ import matplotlib as plt
 import matplotlib.dates as mdates
 import numpy as np
 import requests
+import yfinance as yf
 
 def get_json_financials_from_tikr(stock_ticker):
 
@@ -282,8 +283,8 @@ class Mizrahi(MetricsMethodology):
 
         values = [
             [
-                'Sales YoY up 10%',
-                'Sales YoY up 10%'
+                'Sales YoY > 10%',
+                'Sales YoY < 10%'
             ],
             [
                 'NPM YoY up 10%',
@@ -333,6 +334,105 @@ class Mizrahi(MetricsMethodology):
     def write_spreadsheet(self, writer):
         MetricsMethodology.write_spreadsheet(self, writer, sheetname="Mizrahi")
 
+class Safal(MetricsMethodology):
+
+    def __init__(self, bs, income, cfs):
+        MetricsMethodology.__init__(self, bs, income, cfs)
+
+        self.metrics = pd.DataFrame(index=bs.df.index)
+        self.report = pd.DataFrame(index=bs.df.index)
+
+    def get_market_metrics(self, ticker):
+
+
+        # Need code to grab current marketcap & P/E; use GoogleFinance
+        ticker_info = yf.Ticker(ticker).info
+        
+        # return [ticker_info['regularMarketPreviousClose'], 
+                # ticker_info['marketCap']]
+        # return [ticker_info.keys()]
+
+        self.pe = ticker_info['trailingPE']
+        self.marketcap = ticker_info['marketCap']
+
+
+        
+    def report_qualitative(self):
+
+        cols = [
+            'GrossMargin',
+            'ROE',
+            'MarketCap',
+            'P/E',
+        ]
+
+
+        self.metrics['GrossProfit'] = self.income.df['GrossProfit']
+        self.metrics['GrossProfit_YoY'] = self.income.df['GrossProfit'].pct_change()
+
+        self.metrics['Gross Margin'] = self.income.df['GrossProfit'] / self.income.df.Revenues
+        self.metrics['Gross Margin_YoY'] = self.metrics['Gross Margin'].pct_change()
+
+        self.metrics['ROE'] = self.income.df.NetIncomeLoss / self.bs.df.StockholdersEquity
+        self.metrics['ROE_YoY'] = self.metrics.ROE.pct_change(periods=1)
+
+        self.metrics['P/E'] = self.pe
+        self.metrics['MarketCap'] = self.marketcap
+
+        conditions = [
+            [
+                self.metrics['Gross Margin'] >= .25,
+                self.metrics['Gross Margin'] < .25
+            ],
+            [
+                self.metrics['ROE'] >= .2,
+                self.metrics['ROE'] < .2,
+            ],
+            [
+                self.metrics['MarketCap'] >= 80000000,
+                self.metrics['MarketCap'] < 80000000
+            ],
+            [
+                self.metrics['P/E'] <= 25,
+                self.metrics['P/E'] > 25
+            ]
+
+        ]
+
+        values = [
+            [
+                'Gross Margins >= 25%',
+                'Gross Margins < 25%'
+            ],
+            [
+                'ROE >= 20%',
+                'ROE < 20%'
+            ],
+            [
+                'MarketCap >= 80MM USD',
+                'MarketCap < 80MM USD'
+            ],
+            [
+                'P/E <= 25 :)',
+                'P/E > 25 :('
+            ]
+        ]
+
+        for i in range(len(cols)):
+            self.report[cols[i]] = np.select(conditions[i], values[i], default=np.nan)
+
+
+        return self.report
+
+
+    def report_quantitative(self):
+        return self.pretty(['GrossProfit_YoY','Gross Margin_YoY','ROE_YoY'],
+                    ['MarketCap', 'P/E', 'GrossProfit'],['Gross Margin', 'GrossProfit_YoY', 'ROE', 'Gross Margin_YoY','ROE_YoY'])
+
+    def write_spreadsheet(self, writer):
+        MetricsMethodology.write_spreadsheet(self, writer, sheetname="Safal")
+
+
 class ThreeBrians(MetricsMethodology):
 
     def __init__(self, bs, income, cfs):
@@ -352,7 +452,6 @@ class ThreeBrians(MetricsMethodology):
             'MoreDebtThanCash?',
             'IntangiblesTooHigh?',
             'Goodwill Writedowns?',
-            'Sales Growth',
             'GrossProfit Growth',
             'OperatingMargin Growth',
             'NPM Growth',
@@ -483,10 +582,6 @@ class ThreeBrians(MetricsMethodology):
                 self.metrics['Goodwill_YoY'] >= 0
             ],
             [
-                self.metrics['Sales_YoY'] > 0,
-                self.metrics['Sales_YoY'] <= 0
-            ],
-            [
                 self.metrics['GrossProfit_YoY'] > 0,
                 self.metrics['GrossProfit_YoY'] <= 0
             ],
@@ -577,10 +672,6 @@ class ThreeBrians(MetricsMethodology):
                  'Goodwill steady or increasing: Cool'
              ],
              [
-                 'Sales YoY is growing',
-                 'Sales YoY flat/shrinking'
-             ],
-             [
                  'Gross Profit YoY is growing',
                  'Gross Profit YoY flat/shrinking'
              ],
@@ -661,7 +752,6 @@ class Buffett(MetricsMethodology):
         cols = [
             'GrossMargin',
             'R&D',
-            'NPM',
             'SGA',
             'InterestExpense',
             'DepreciationAmortizationExpense',
@@ -706,12 +796,6 @@ class Buffett(MetricsMethodology):
             ],
             [
                 True
-            ],
-            [
-                self.metrics['NPM'] >= .2,
-                (self.metrics['NPM'] < .2) &
-                (self.metrics['NPM'] >= .1),
-                self.metrics['NPM'] < .1
             ],
             [
                 self.metrics['SGA'] <= .3,
@@ -768,10 +852,6 @@ class Buffett(MetricsMethodology):
              [
                  'Too Much R&D? tbd'
              ],
-             ['NPM implies DCA',
-              'NPM implies grey area; may or may have some DCA',
-              'NPM implies highly competitive industry; hard to see DCA'
-              ],
               [
                   "Fantastic! Keeping SGA down",
                   "May be OK; Sometimes necessary to keep DCA",
