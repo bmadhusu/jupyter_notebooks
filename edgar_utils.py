@@ -7,6 +7,22 @@ import numpy as np
 import requests
 import yfinance as yf
 
+bs_tag_alternates = {"AccountsPayableAndAccruedLiabilitiesCurrent":"AccountsPayable",
+                     "AccountsPayableCurrent":"AccountsPayable",
+                     "MarketableSecuritiesCurrent": "MarketableSecurities",
+                     "IndefiniteLivedTradeNames":"IndefiniteLivedTrademarks",
+                     "OtherIndefiniteLivedIntangibleAssets":"OtherIndefiniteLivedAndFiniteLivedIntangibleAssets",
+                     "FiniteLivedIntangibleAssetsNet": "OtherIntangibleAssetsNet",
+                     "IntangibleAssetsNetExcludingGoodwill": "OtherIntangibleAssetsNet",
+                     "InventoryFinishedGoodsNetOfReserves": "InventoryNet"
+                     }
+is_tag_alternates = {'RevenueFromContractWithCustomerExcludingAssessedTax':"Revenues",
+                     'GeneralAndAdministrativeExpense':'SellingGeneralAndAdministrativeExpense'
+                     }
+cf_tag_alternates = {'PaymentsToAcquireProductiveAssets':'PaymentsToAcquirePropertyPlantAndEquipment',
+                     'Depreciation':'DepreciationDepletionAndAmortization'}
+
+
 def get_json_financials_from_tikr(stock_ticker):
 
 
@@ -49,43 +65,68 @@ def get_json_financials_from_tikr(stock_ticker):
 
     return company_data
 
+def check_for_no_conflicts(k, v, df):
+
+    x = df[df.tag.isin([k,v])]
+    # x = x.groupby(['fy','tag'])
+    y = x.loc[:,['fy','tag']].drop_duplicates()
+    z = y.groupby(['fy'])['tag'].count() 
+    # If there's an exception, uncomment the print and run again!
+    # print(x)
+    # print(y)
+    # print(z)
+
+    return (z < 2).all()
+
 # Create financial statements
 
 class FinStatement(object):
 
-    def __init__(self, df, starting_year, ending_year=None):
+    def __init__(self, df, ticker, starting_year, ending_year=None):
         #self.attribs = attribs
         self.starting_year = starting_year
         # narrow down the dataframe to only the items of interest
 
         self.df = df
 
+        self.ticker = ticker
+
+
         # NOTE: Capturing 10Ks & 8Ks because sometimes the 8Ks supplant the info in the 10Ks
         # Doesn't happen very much, but 2018 8-K for KO has a different value for NetInventory
         # so caused a problem; see below for a neat trick to filter out
         self.df = self.df[(self.df.form.isin(['10-K', '8-K']))]
 
+        # Eliminate those items with 0s
+        self.df = self.df[self.df.val > 0]
+
         
 
 class BalanceSheet(FinStatement):
 
-    def filterMarketableSecurities(df):
-        return_df = df[df.tag.isin(['MarketableSecuritiesCurrent', 'MarketableSecurities'])]
+    def __init__(self, df, ticker, offset_fy, starting_year, ending_year=None):
+        FinStatement.__init__(self, df, ticker, starting_year, ending_year)
 
-        return return_df
+        self.offset_fy = offset_fy
+
+        #NOTE : offset_fy should be either 0 or 1
+        # needed to account for company's fy being off by calendar year
+
+        # if these alternate tags are used, print out warnings
+
+        for k, v in bs_tag_alternates.items():
+            if ~check_for_no_conflicts(k,v,self.df):
+                raise ValueError('Both ' + k + ' and ' + v + ' found; Need to disambiguate')
+    
+            if (self.df.tag == k).any():
+                print("WARN: Found " + k + "; Converting to: " + v)
+                self.df.loc[self.df.tag==k,"tag"]=v
 
 
-    def __init__(self, df, starting_year, ending_year=None):
-        FinStatement.__init__(self, df, starting_year, ending_year)
-
-        #self.df = self.filterMarketableSecurities(self.df)
-
-        self.df.loc[self.df.tag=='MarketableSecuritiesCurrent',"tag"]='MarketableSecurities'
-
-        self.attribs = ['IndefiniteLivedTrademarks','OtherIndefiniteLivedAndFiniteLivedIntangibleAssets','RetainedEarningsAccumulatedDeficit','TreasuryStockValue','InventoryNet','MarketableSecurities','AccountsReceivableNetCurrent','CashAndCashEquivalentsAtCarryingValue','LongTermDebtNoncurrent', 'Assets','LiabilitiesCurrent','Liabilities','StockholdersEquity','LiabilitiesAndStockholdersEquity','AssetsCurrent', 'Goodwill']
+        self.attribs = ['LongTermDebtCurrent','MinorityInterest','PreferredStockIncludingAdditionalPaidInCapitalNetOfDiscount','OtherIntangibleAssetsNet','IndefiniteLivedTrademarks','OtherIndefiniteLivedAndFiniteLivedIntangibleAssets','RetainedEarningsAccumulatedDeficit','TreasuryStockValue','InventoryNet','MarketableSecurities','AccountsReceivableNetCurrent','CashAndCashEquivalentsAtCarryingValue','LongTermDebtNoncurrent', 'Assets','LiabilitiesCurrent','Liabilities','StockholdersEquity','LiabilitiesAndStockholdersEquity','AssetsCurrent', 'Goodwill', 'AccountsPayable', 'AccruedIncomeTaxesCurrent', 'OperatingLeaseLiabilityCurrent','ContractWithCustomerLiability','CustomerRefundLiabilityCurrent','AccruedAdvertisingCurrent','DerivativeLiabilitiesCurrent','LiabilitiesOfDisposalGroupIncludingDiscontinuedOperationCurrent']
         # self.df = self.df[(self.df.tag.isin(self.attribs)) & (self.df.fy >= starting_year) & (self.df.end.dt.year == self.df.fy) & (self.df.frame.isnull())]
 
-        self.df = self.df[(self.df.tag.isin(self.attribs)) & (self.df.fy >= starting_year) & (self.df.end.dt.year == self.df.fy) ]
+        self.df = self.df[(self.df.tag.isin(self.attribs)) & (self.df.fy >= starting_year) & (self.df.end.dt.year == self.df.fy+self.offset_fy) ]
 
         if ending_year:
             self.df = self.df[self.df.fy <= ending_year]
@@ -94,12 +135,23 @@ class BalanceSheet(FinStatement):
         # below is useful trick to filter out dupes based on a certain criteria
         # https://stackoverflow.com/questions/68624884/pandas-how-to-use-groupby-and-max-to-select-the-rows-with-max-date
 
+        # this occurs when there are multiple tags for a given year, possibly because of an amendment, or 8-K
+        # or the 10-K just has multiple figures for the same tag for whatever reason
         temp_df = self.df[self.df.groupby('fy').filed.transform('max') == self.df.filed]
+        temp_df = temp_df[temp_df.groupby('fy').end.transform('max') == temp_df.end]
+
+        # return
         self.df = pd.pivot(temp_df, index=['fy'], columns='tag',values='val')
 
         # For any attribs that weren't available, fill them in and give them np.nan or 0 (tbd?)
         attrib_diffs = list(set(self.attribs) - set(self.df.columns))
         self.df.loc[:,attrib_diffs]=np.nan
+
+
+
+        # Some values can be inferred; Plug them in
+        # E.g. KO doesn't have liabilities!?! So just calc it!
+        self.df['Liabilities'] = self.df['Assets'] - self.df['StockholdersEquity']
 
 def filterPeriodStatement(df):
         
@@ -124,9 +176,17 @@ class IncomeStatement(FinStatement):
     def __init__(self, df, starting_year, ending_year=None):
         FinStatement.__init__(self, df, starting_year, ending_year)
 
-        self.df.loc[self.df.tag=='RevenueFromContractWithCustomerExcludingAssessedTax',"tag"]='Revenues'
-        self.df.loc[self.df.tag=='GeneralAndAdministrativeExpense', "tag"] = 'SellingGeneralAndAdministrativeExpense' 
+        # self.df.loc[self.df.tag=='RevenueFromContractWithCustomerExcludingAssessedTax',"tag"]='Revenues'
+        # self.df.loc[self.df.tag=='GeneralAndAdministrativeExpense', "tag"] = 'SellingGeneralAndAdministrativeExpense' 
         #self.df.loc[self.df.tag=='CostsAndExpenses', "tag"] = 'OperatingExpenses'
+
+        for k, v in is_tag_alternates.items():
+            if ~check_for_no_conflicts(k,v,self.df):
+                raise ValueError('Both ' + k + ' and ' + v + ' found; Need to disambiguate')
+
+            if (self.df.tag == k).any():
+                print("WARN: Found " + k + "; Converting to: " + v)
+                self.df.loc[self.df.tag==k,"tag"]=v
 
         self.df = filterPeriodStatement(self.df)
 
@@ -150,6 +210,14 @@ class CashFlowStatement(FinStatement):
 
     def __init__(self, df, starting_year, ending_year=None):
         FinStatement.__init__(self, df, starting_year, ending_year)
+
+        for k, v in cf_tag_alternates.items():
+            if ~check_for_no_conflicts(k,v,self.df):
+                raise ValueError('Both ' + k + ' and ' + v + ' found; Need to disambiguate')
+
+            if (self.df.tag == k).any():
+                print("WARN: Found " + k + "; Converting to: " + v)
+                self.df.loc[self.df.tag==k,"tag"]=v
 
         self.df = filterPeriodStatement(self.df)
 
@@ -197,11 +265,13 @@ class Mizrahi(MetricsMethodology):
 
         self.metrics = pd.DataFrame(index=bs.df.index)
         self.report = pd.DataFrame(index=bs.df.index)
+        self.name = 'Mizrahi'
+
         
     def report_qualitative(self):
 
         cols = [
-            'Revenues',
+            'Sales',
             'NPM',
             'ROE',
             'OperatingMargin',
@@ -226,7 +296,7 @@ class Mizrahi(MetricsMethodology):
         self.metrics['ROE_YoY'] = self.metrics.ROE.pct_change(periods=1)
 
         self.metrics['OperatingMargin'] = self.income.df['OperatingIncomeLoss'] / self.metrics.Sales
-        self.metrics['Oper_Margin_YoY'] = self.metrics['OperatingMargin'].pct_change()
+        self.metrics['OperatingMargin_YoY'] = self.metrics['OperatingMargin'].pct_change()
 
         self.metrics['EPS-DILUTED'] = self.income.df.EarningsPerShareDiluted
         self.metrics['EPS_YoY'] = self.metrics['EPS-DILUTED'].pct_change()
@@ -256,8 +326,8 @@ class Mizrahi(MetricsMethodology):
                 self.metrics['ROE_YoY'] < .1,
             ],
             [
-                self.metrics['Oper_Margin_YoY'] >= .1,
-                self.metrics['Oper_Margin_YoY'] < .1
+                self.metrics['OperatingMargin_YoY'] >= .1,
+                self.metrics['OperatingMargin_YoY'] < .1
             ],
             [
                 self.metrics['EPS_YoY'] >= .1,
@@ -328,8 +398,8 @@ class Mizrahi(MetricsMethodology):
 
 
     def report_quantitative(self):
-        return self.pretty(['Solvency_YoY','ROE_YoY', 'Sales_YoY','NPM_YoY', 'Oper_Margin_YoY','EPS_YoY', 'FCF_YoY','FCF_Margin_YoY'],
-                    ['Sales','FCF'],['FCF_Margin','OperatingMargin','ROE','NPM','ROE_YoY', 'Sales_YoY','NPM_YoY', 'Oper_Margin_YoY','EPS_YoY', 'FCF_YoY','FCF_Margin_YoY'])
+        return self.pretty(['Solvency_YoY','ROE_YoY', 'Sales_YoY','NPM_YoY', 'OperatingMargin_YoY','EPS_YoY', 'FCF_YoY','FCF_Margin_YoY'],
+                    ['Sales','FCF'],['FCF_Margin','OperatingMargin','ROE','NPM','ROE_YoY', 'Sales_YoY','NPM_YoY', 'OperatingMargin_YoY','EPS_YoY', 'FCF_YoY','FCF_Margin_YoY'])
 
     def write_spreadsheet(self, writer):
         MetricsMethodology.write_spreadsheet(self, writer, sheetname="Mizrahi")
@@ -341,6 +411,8 @@ class Safal(MetricsMethodology):
 
         self.metrics = pd.DataFrame(index=bs.df.index)
         self.report = pd.DataFrame(index=bs.df.index)
+        self.name = 'Safal'
+
 
     def get_market_metrics(self, ticker):
 
@@ -440,6 +512,8 @@ class ThreeBrians(MetricsMethodology):
 
         self.metrics = pd.DataFrame(index=bs.df.index)
         self.report = pd.DataFrame(index=bs.df.index)
+        self.name = '3Brians'
+
         
     
     def report_qualitative(self):
@@ -449,7 +523,7 @@ class ThreeBrians(MetricsMethodology):
             'CurrentRatio',
             'Solvency (D/E)',
             'Goodwill-to-Assets',
-            'MoreDebtThanCash?',
+            'LessCashThanDebt?',
             'IntangiblesTooHigh?',
             'Goodwill Writedowns?',
             'GrossProfit Growth',
@@ -494,8 +568,8 @@ class ThreeBrians(MetricsMethodology):
         self.metrics['Gross Margin'] = self.income.df['GrossProfit'] / self.metrics.Sales
         self.metrics['Gross Margin_YoY'] = self.metrics['Gross Margin'].pct_change()
 
-        self.metrics['Oper Margin'] = self.income.df['OperatingIncomeLoss'] / self.metrics.Sales
-        self.metrics['Oper Margin_YoY'] = self.metrics['Oper Margin'].pct_change()
+        self.metrics['OperatingMargin'] = self.income.df['OperatingIncomeLoss'] / self.metrics.Sales
+        self.metrics['OperatingMargin_YoY'] = self.metrics['OperatingMargin'].pct_change()
 
         self.metrics['NPM'] = self.income.df.NetIncomeLoss / self.metrics.Sales
         self.metrics['NPM_YoY'] = self.metrics.NPM.pct_change(periods=1)
@@ -542,8 +616,6 @@ class ThreeBrians(MetricsMethodology):
         self.metrics['ROE'] = self.income.df.NetIncomeLoss / self.metrics.Equity
         self.metrics['ROE_YoY'] = self.metrics.ROE.pct_change(periods=1)
         
-
-
         conditions = [
             [
                 self.metrics['QuickRatio'] < 1,
@@ -586,8 +658,8 @@ class ThreeBrians(MetricsMethodology):
                 self.metrics['GrossProfit_YoY'] <= 0
             ],
             [
-                self.metrics['Oper Margin_YoY'] > 0,
-                self.metrics['Oper Margin_YoY'] <= 0
+                self.metrics['OperatingMargin_YoY'] > 0,
+                self.metrics['OperatingMargin_YoY'] <= 0
             ],
             [
                 self.metrics['NPM_YoY'] > 0,
@@ -607,7 +679,8 @@ class ThreeBrians(MetricsMethodology):
             ],
             [
                 self.metrics['SGA%_YoY'] <= 0,
-                self.metrics['SGA%_YoY'] > 0
+                self.metrics['SGA%_YoY'] > 0,
+                True # default fall-through condition
             ],
             [
                 self.metrics['Sales_YoY'] > self.metrics['OperatingExpenses_YoY'],
@@ -615,34 +688,40 @@ class ThreeBrians(MetricsMethodology):
             ],
             [
                 (self.metrics['NPM_YoY'] > self.metrics['Sales_YoY']) & 
-                (self.metrics['Oper Margin_YoY'] > self.metrics['Sales_YoY']) & 
+                (self.metrics['OperatingMargin_YoY'] > self.metrics['Sales_YoY']) & 
                 (self.metrics['Gross Margin_YoY'] > self.metrics['Sales_YoY']) &
-                (self.metrics['NPM_YoY'] > 0) & (self.metrics['Oper Margin_YoY'] > 0) &
+                (self.metrics['NPM_YoY'] > 0) & (self.metrics['OperatingMargin_YoY'] > 0) &
                 (self.metrics['Gross Margin_YoY'] > 0) & (self.metrics['Sales_YoY'] > 0)
             ],
             [
-                self.metrics['OperCashFlow_YoY'] > self.metrics['NetIncome_YoY']
+                self.metrics['OperCashFlow_YoY'] > self.metrics['NetIncome_YoY'],
+                self.metrics['OperCashFlow_YoY'] <= self.metrics['NetIncome_YoY']
             ],
             [
-                self.metrics['CapEx_YoY'] < 0
+                self.metrics['CapEx_YoY'] <= 0,
+                self.metrics['CapEx_YoY'] > 0
             ],
             [
-                self.metrics['FCF_YoY'] > 0
+                self.metrics['FCF_YoY'] > 0,
+                self.metrics['FCF_YoY'] <= 0
             ],
             [
-                self.metrics['SBC%'] > .4
+                self.metrics['SBC%'] > .4,
+                self.metrics['SBC%'] <= .4
             ],
             [
-                self.cfs.df['DepreciationDepletionAndAmortization'] > self.metrics['CapEx']
+                self.metrics['Depreciation'] > self.metrics['CapEx'],
+                self.metrics['Depreciation'] <= self.metrics['CapEx']
+
             ]
 
         ]
 
         values = [
             [
-                'QuickRatio: Fragile',
-                'QuickRatio: Robust',
-                'QuickRatio: Antifragile'
+                'QuickRatio: < 1.0 => Fragile',
+                'QuickRatio: b/w 1 & 1.5 => Robust',
+                'QuickRatio: > 1.5 => Antifragile'
              ],
              [
                 'CurrentRatio: Fragile',
@@ -655,9 +734,9 @@ class ThreeBrians(MetricsMethodology):
                  'Solvency is Anti-fragile'
              ],
              [
-                 'Goodwill-to-Assets is Fragile',
-                 'Goodwill-to-Assets is Robust',
-                 'Goodwill-to-Assets is Anti-fragile'
+                 'Goodwill-to-Assets: >.5 => Fragile',
+                 'Goodwill-to-Assets: b/w .1 & .5 => Robust',
+                 'Goodwill-to-Assets: <.1 => Anti-fragile'
              ],
              [
                  'More Cash than Debt: GREEN LIGHT',
@@ -696,30 +775,36 @@ class ThreeBrians(MetricsMethodology):
                  'Operating Expenses YoY up!'
              ],
              [
-                 'SGA as % of gross profit going down!',
-                 'SGA as % of gross profit going up :('
+                 'SGA as % of gross profit going down :)',
+                 'SGA as % of gross profit going up :(',
+                 'Not sure what to make of it'
              ],
              [
-                 'SalesGrowth outpacing ExpenseGrowth!',
+                 'SalesGrowth outpacing ExpenseGrowth :)',
                  'SalesGrowth lagging ExpenseGrowth :('
              ],
              [
                  'All margins growing faster than revenues: Operating Leverage!'
              ],
              [
-                 'Operating Cash Flow YoY is greater than NetIncome YoY!'
+                 'Operating Cash Flow YoY is greater than NetIncome YoY :)',
+                 'Operating Cash Flow YoY is less than NetIncome YoY :('
              ],
              [
-                 'Capex investment going down :('
+                 'Capex investment going down :(',
+                 'Capex investment going up :)'
              ],
              [
-                 'FCF going up :)'
+                 'FCF YoY going up :)',
+                 'FCF YoY going down :('
              ],
              [
-                 'SBC is excessive! For high-growth companies, should cap at 30%'
+                 'SBC is excessive! For high-growth companies, should cap at 30%',
+                 'SBC seems OK'
              ],
              [
-                 'Depreciation > CapEx; Yellow Flag!'
+                 'Depreciation > CapEx; Yellow Flag :(',
+                 'Depreciation < CapEx; OK'
              ]
         ]
 
@@ -746,6 +831,7 @@ class Buffett(MetricsMethodology):
         
         self.metrics = pd.DataFrame(index=bs.df.index)
         self.report = pd.DataFrame(index=bs.df.index)
+        self.name = 'Buffett'
 
     def report_qualitative(self):
 
@@ -758,7 +844,7 @@ class Buffett(MetricsMethodology):
             'IncomeTaxScrutiny',
             'Asset Sale - Entry Other',
             'Inventory',
-            'NetReceivables',
+            'NetReceivables as Pct of Revenue',
             'AdjDebtToEquity',
             'RetainedEarnings',
             'CapEx/NetIncome',
@@ -778,7 +864,8 @@ class Buffett(MetricsMethodology):
         self.metrics['EPS_YoY'] = self.metrics['EPS-DILUTED'].pct_change()
         self.metrics['EBT'] = self.income.df['IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest']
         self.metrics['Inventory'] = self.bs.df['InventoryNet']
-        self.metrics['NetReceivables'] = self.bs.df['AccountsReceivableNetCurrent'] / self.income.df['Revenues']
+        self.metrics['NetIncome'] = self.income.df.NetIncomeLoss
+        self.metrics['NetReceivables as % of Sales'] = self.bs.df['AccountsReceivableNetCurrent'] / self.income.df['Revenues']
         self.metrics['ROA'] = self.income.df.NetIncomeLoss / self.bs.df['Assets']
         self.metrics['YearsofNItoPayLTD'] = np.ceil(self.bs.df['LongTermDebtNoncurrent'] / self.income.df.NetIncomeLoss)
         self.metrics['AdjDebtToEquityRatio'] = self.bs.df['LongTermDebtNoncurrent']/(self.bs.df['TreasuryStockValue']+self.bs.df['StockholdersEquity'])
@@ -853,17 +940,17 @@ class Buffett(MetricsMethodology):
                  'Too Much R&D? tbd'
              ],
               [
-                  "Fantastic! Keeping SGA down",
-                  "May be OK; Sometimes necessary to keep DCA",
-                  "Too excessive"
+                  "SGA < .3 of gross profits :)",
+                  "SGA b/w .3 & .8; Sometimes necessary to keep DCA :/",
+                  "SGA > .8; Too excessive :("
               ],
               [
-                  "Company may have tough competition",
-                  "Little to no interest expense; great!"
+                  "Interest expense as % of OI: >= .1 => Company may have tough competition :(",
+                  "Interest expense as % of OI: < .1 :)"
               ],
               [
-                  "Higher depreciation % => may have no DCA",
-                  "Little to no deprec expense; great!"
+                  "Higher depreciation % of Gross Profits >= .1 => may have no DCA :(",
+                  "Little to no deprec % of Gross Profits < .1; great! :)"
               ],
               [
                   "Tax gap may be too wide!",
@@ -879,16 +966,16 @@ class Buffett(MetricsMethodology):
                   'Is Receivables/Sales trending down? This indicates DCA'
               ],
               [
-                  'Indicative of NO DCA',
-                  'Indicative of DCA'
+                  'Tsy-Adjusted D/E >= .8 => Indicative of NO DCA :(',
+                  'Tsy-Adjusted D/E < .8 => Indicative of DCA :)'
               ],
               [
                   'Is Retained Earnings going up?'
               ],
               [
-                  'CapEx pretty low; DCA likely!',
-                  'May have DCA',
-                  'Expensive to maintain; Wary of DCA'
+                  'CapEx/NetIncome is < .25 => DCA likely :)',
+                  'CapEx/NetIncome b/w .25 & .5 => May have DCA :/',
+                  'CapEx/NetIncome > .5 => Expensive to maintain; Wary of DCA :('
               ],
               [
                   'Shares being bought back. Good!',
@@ -911,10 +998,136 @@ class Buffett(MetricsMethodology):
         MetricsMethodology.write_spreadsheet(self, writer, sheetname="Buffett")
         # self.report.to_excel(writer, sheetname="Buffett")
     
+class KJMarshall(MetricsMethodology):
+
+    def __init__(self, ticker, bs, income, cfs):
+        MetricsMethodology.__init__(self, bs, income, cfs)
+        
+        self.metrics = pd.DataFrame(index=bs.df.index)
+        self.report = pd.DataFrame(index=bs.df.index)
+        self.name = 'KJMarshall'
+        self.ticker = ticker
+
+    def report_qualitative(self):
+
+        cols = [
+            'CapitalEmployed',
+            'Levered FCF',
+            'Unlevered FCF'
+            
+        ]
+
+        # self.metrics['CapitalEmployed'] = self.bs.df['Assets'] - self.bs.df['AccountsPayable'] - self.bs.df['AccruedIncomeTaxesCurrent'] - self.bs.df['OperatingLeaseLiabilityCurrent'] - self.bs.df['ContractWithCustomerLiability'] - self.bs.df['AccruedAdvertisingCurrent'] - self.bs.df['DerivativeLiabilitiesCurrent'] - self.bs.df['LiabilitiesOfDisposalGroupIncludingDiscontinuedOperationCurrent']
+
+        # Below are used for Capital Employed
+        self.metrics = self.bs.df.loc[:,['Assets','CashAndCashEquivalentsAtCarryingValue', 'MarketableSecurities', 'AccountsPayable','AccruedIncomeTaxesCurrent','OperatingLeaseLiabilityCurrent','ContractWithCustomerLiability','AccruedAdvertisingCurrent','DerivativeLiabilitiesCurrent','LiabilitiesOfDisposalGroupIncludingDiscontinuedOperationCurrent']]
+        
+        # Oper Income used to calc ROCE
+        self.metrics['OperatingIncome'] = self.income.df['OperatingIncomeLoss']
+        self.metrics['Levered FCF'] = self.cfs.df['NetCashProvidedByUsedInOperatingActivities'] - self.cfs.df['PaymentsToAcquirePropertyPlantAndEquipment']
+
+        self.metrics['InterestExpense'] = self.income.df['InterestExpense']
+        
+        self.metrics['ShareholderEquity'] = self.bs.df.StockholdersEquity
+
+        self.metrics['No. Shares Diluted'] = self.income.df.WeightedAverageNumberOfDilutedSharesOutstanding
+
+        self.metrics['Goodwill'] = self.bs.df['Goodwill']
+        self.metrics['IndefiniteLivedTrademarks'] = self.bs.df['IndefiniteLivedTrademarks']
+        self.metrics['OtherIndefiniteLivedAndFiniteLivedIntangibleAssets'] = self.bs.df['OtherIndefiniteLivedAndFiniteLivedIntangibleAssets']
+        self.metrics['OtherIntangibleAssetsNet'] = self.bs.df['OtherIntangibleAssetsNet']
+
+        self.metrics['Liabilities'] = self.bs.df['Liabilities']
+
+        self.metrics['TotalDebt'] = self.bs.df['LongTermDebtCurrent'] + self.bs.df['LongTermDebtNoncurrent']
+        self.metrics['MinorityInterest'] = self.bs.df['MinorityInterest']
+        self.metrics['PreferredEquity'] = self.bs.df['PreferredStockIncludingAdditionalPaidInCapitalNetOfDiscount']
+
+        conditions = [
+            [
+                True
+            ],
+            [
+                True
+            ],
+            [
+                True
+            ]
+        ]
+
+        values = [
+            [
+                'Check value history of Goodwill to see if needs to be subtracted from Cap Emp'
+             ],
+             [
+                 'Assuming CapEx is all maintenance CapEx unless can get better info from an Inv. Relations call'
+             ],
+             [
+                 'Find out tax rate and apply to Interest; then subtract from Levered FCF'
+             ]
+        ]
+
+        for i in range(len(cols)):
+            self.report[cols[i]] = np.select(conditions[i], values[i], default=np.nan)
+
+
+        return self.report
+
+    def get_market_metrics(self, ticker):
+
+
+        # Need code to grab current marketcap & P/E; use GoogleFinance
+        ticker_info = yf.Ticker(ticker).info
+        
+        # return [ticker_info['regularMarketPreviousClose'], 
+                # ticker_info['marketCap']]
+        # return [ticker_info.keys()]
+
+        self.pe = ticker_info['trailingPE']
+        self.marketcap = ticker_info['marketCap']
+    
+    def report_quantitative(self):
+        return self.metrics
+        # return self.pretty(['EPS_YoY', 'RetainedYoY'],
+        #         ['IncomeTaxManualCalc','ReportedTax','EBT','Inventory','RetainedEarnings','NetSharesBuyback'],
+        #          ['GrossMargin','NPM','SGA','InterestExpense','DepreciationAmortizationExpense', 'NetReceivables','ROA', 'AdjDebtToEquityRatio','RetainedYoY', 'CapEx/NetIncome'])
+
+    def write_spreadsheet(self, writer):
+        MetricsMethodology.write_spreadsheet(self, writer, sheetname="KJMarshall")
+
+
+def gather_columns(df, txt):
+    return df.filter(regex=txt)
+
+def create_common_metrics(*methods):
+
+    df_common = pd.DataFrame()
+
+    for s in ['Sales', 'Gross','CurrentRatio', 'Solvency', 'NPM', 'ROE', 'OperatingMargin', 'SGA','EPS', 'FCF']:
+
+        # Gather metrics
+        for m in methods:
+            # df_common = pd.concat([df_common, gather_columns(m.metrics, s)], axis="columns").T.drop_duplicates().T
+            df_common = pd.concat([df_common, gather_columns(m.metrics, s)], axis="columns")
+
+        # Now gather commentary
+        for m in methods:
+            ret_df = gather_columns(m.report, s)
+            # Nice trick to append to colnames
+            # https://stackoverflow.com/questions/34049618/how-to-add-a-suffix-or-prefix-to-each-column-name
+            ret_df.columns = [str(col) + '-' + m.name for col in ret_df.columns]
+
+            df_common = pd.concat([df_common,ret_df],axis="columns")
+
+    # Below trick to get rid of dupe columns from: https://sparkbyexamples.com/pandas/pandas-remove-duplicate-columns-from-dataframe/#:~:text=To%20drop%20duplicate%20columns%20from%20pandas%20DataFrame%20use%20df.,data%20regardless%20of%20column%20names.
+
+    return df_common.T.drop_duplicates().T
 
     
-def write_spreadsheet(fname, *methods): #, mizrahi, threebrians):
+def write_spreadsheet(fname, common_df, *methods): #, mizrahi, threebrians):
     with pd.ExcelWriter(fname) as writer:
+
+        common_df.to_excel(writer, sheet_name='Common')
    
         for m in methods:
             m.write_spreadsheet(writer)

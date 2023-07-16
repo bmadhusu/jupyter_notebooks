@@ -7,3 +7,4 @@ Stock Return Analysis.ipynb
 __pycache__/
 .ipynb_checkpoints/
 *.xlsx
+*.pybak
