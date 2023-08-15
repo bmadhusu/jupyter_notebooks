@@ -117,7 +117,7 @@ class BalanceSheet(FinStatement):
         for k, v in bs_tag_alternates.items():
             if ~check_for_no_conflicts(k,v,self.df):
                 raise ValueError('Both ' + k + ' and ' + v + ' found; Need to disambiguate')
-    
+
             if (self.df.tag == k).any():
                 print("WARN: Found " + k + "; Converting to: " + v)
                 self.df.loc[self.df.tag==k,"tag"]=v
@@ -433,9 +433,9 @@ class Safal(MetricsMethodology):
 
         cols = [
             'GrossMargin',
-            'ROE',
-            'MarketCap',
-            'P/E',
+            'ROE'#,
+          #  'MarketCap',
+           # 'P/E',
         ]
 
 
@@ -448,8 +448,8 @@ class Safal(MetricsMethodology):
         self.metrics['ROE'] = self.income.df.NetIncomeLoss / self.bs.df.StockholdersEquity
         self.metrics['ROE_YoY'] = self.metrics.ROE.pct_change(periods=1)
 
-        self.metrics['P/E'] = self.pe
-        self.metrics['MarketCap'] = self.marketcap
+        #self.metrics['P/E'] = self.pe
+        #self.metrics['MarketCap'] = self.marketcap
 
         conditions = [
             [
@@ -459,15 +459,15 @@ class Safal(MetricsMethodology):
             [
                 self.metrics['ROE'] >= .2,
                 self.metrics['ROE'] < .2,
-            ],
-            [
-                self.metrics['MarketCap'] >= 80000000,
-                self.metrics['MarketCap'] < 80000000
-            ],
-            [
-                self.metrics['P/E'] <= 25,
-                self.metrics['P/E'] > 25
-            ]
+            ]#,
+            # [
+            #     self.metrics['MarketCap'] >= 80000000,
+            #     self.metrics['MarketCap'] < 80000000
+            # ],
+            # [
+            #     self.metrics['P/E'] <= 25,
+            #     self.metrics['P/E'] > 25
+            # ]
 
         ]
 
@@ -479,15 +479,15 @@ class Safal(MetricsMethodology):
             [
                 'ROE >= 20%',
                 'ROE < 20%'
-            ],
-            [
-                'MarketCap >= 80MM USD',
-                'MarketCap < 80MM USD'
-            ],
-            [
-                'P/E <= 25 :)',
-                'P/E > 25 :('
-            ]
+            ]#,
+            # [
+            #     'MarketCap >= 80MM USD',
+            #     'MarketCap < 80MM USD'
+            # ],
+            # [
+            #     'P/E <= 25 :)',
+            #     'P/E > 25 :('
+            # ]
         ]
 
         for i in range(len(cols)):
